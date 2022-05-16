@@ -20,11 +20,46 @@ async function run() {
   try {
     await client.connect();
     const doctorService = client.db("doctorsService").collection("service");
+    const bookingService = client.db("doctorsService").collection("booking");
 
     app.get("/service", async (req, res) => {
       const query = {};
       const cursor = doctorService.find(query);
       const services = await cursor.toArray();
+      res.send(services);
+    });
+
+    app.post("/booking", async (req, res) => {
+      const booking = req.body;
+      const query = {
+        treatmentName: booking.treatmentName,
+        date: booking.date,
+        patient: booking.patient,
+      };
+      const exists = await bookingService.findOne(query);
+      if (exists) {
+        return res.send({ success: false, booking: exists });
+      }
+      const result = await bookingService.insertOne(booking);
+      return res.send({ success: true, result });
+    });
+
+    app.get("/available", async (req, res) => {
+      const date = req.query.date;
+      const services = await doctorService.find().toArray();
+
+      const query = { date: date };
+      const bookings = await bookingService.find(query).toArray();
+      services.forEach((service) => {
+        const servicesBooking = bookings.filter(
+          (book) => book.treatmentName === service.name
+        );
+        const bookedSlots = servicesBooking.map((book) => book.slot);
+        const available = service.slots.filter(
+          (slot) => !bookedSlots.includes(slot)
+        );
+        service.slots = available;
+      });
       res.send(services);
     });
   } finally {
