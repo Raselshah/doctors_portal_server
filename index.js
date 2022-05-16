@@ -21,12 +21,25 @@ async function run() {
     await client.connect();
     const doctorService = client.db("doctorsService").collection("service");
     const bookingService = client.db("doctorsService").collection("booking");
+    const userService = client.db("doctorsService").collection("users");
 
     app.get("/service", async (req, res) => {
       const query = {};
       const cursor = doctorService.find(query);
       const services = await cursor.toArray();
       res.send(services);
+    });
+
+    app.put("/user/:email", async (req, res) => {
+      const email = req.params.email;
+      const filter = { email: email };
+      const options = { upsert: true };
+      const user = req.body;
+      const updateDoc = {
+        $set: user,
+      };
+      const result = await userService.updateOne(filter, updateDoc, options);
+      res.send(result);
     });
 
     app.post("/booking", async (req, res) => {
