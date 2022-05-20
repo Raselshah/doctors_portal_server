@@ -1,8 +1,11 @@
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
+var nodemailer = require("nodemailer");
+var sgTransport = require("nodemailer-sendgrid-transport");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
+const stripe = require("stripe")(process.env.SECRET_KEY_STRIPE);
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -32,6 +35,41 @@ function verifyJWT(req, res, next) {
   });
 }
 
+var options = {
+  auth: {
+    api_key: process.env.EMAIL_SENDER,
+  },
+};
+var mailer = nodemailer.createTransport(sgTransport(options));
+
+function sendAppointmentEmail(booking) {
+  const { patient, patientName, date, slot, treatmentName } = booking;
+  var email = {
+    to: patient,
+    from: process.env.EMAIL_SENDER_ID,
+    subject: `Your appointment for ${treatmentName} is on ${date} at ${slot} is confirmed`,
+    text: `Your appointment for ${treatmentName} is on ${date} at ${slot} is confirmed`,
+    html: `
+    <div>
+      <h2>Your appointment for ${treatmentName}</h2>
+      <p>${date}</p>
+      <p>${slot}</p>
+      <p>Our address</p>
+      <p>andor khali bandorban</p>
+      <p>confirmed your booking</p>
+      <a href="https://www.linkedin.com/feed/?trk=homepage-basic_google-one-tap-submit">please follow me</a>
+    </div>
+    `,
+  };
+
+  mailer.sendMail(email, function (err, res) {
+    if (err) {
+      console.log(err);
+    }
+    console.log(res);
+  });
+}
+
 async function run() {
   try {
     await client.connect();
@@ -39,6 +77,7 @@ async function run() {
     const bookingService = client.db("doctorsService").collection("booking");
     const userService = client.db("doctorsService").collection("users");
     const addDoctor = client.db("doctorsService").collection("doctors");
+    const paymentUser = client.db("doctorsService").collection("payment");
 
     const verifyAdmin = async (req, res, next) => {
       const requester = req.decoded.email;
@@ -106,7 +145,20 @@ async function run() {
         return res.send({ success: false, booking: exists });
       }
       const result = await bookingService.insertOne(booking);
+      sendAppointmentEmail(booking);
       return res.send({ success: true, result });
+    });
+
+    app.post("/create-payment-intent", verifyJWT, async (req, res) => {
+      const service = req.body;
+      const price = service.price;
+      const amount = price * 100;
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.send({ clientSecret: paymentIntent.client_secret });
     });
 
     app.get("/booking", verifyJWT, async (req, res) => {
@@ -119,6 +171,29 @@ async function run() {
       } else {
         return res.status(403).send({ message: "Forbidden access" });
       }
+    });
+
+    app.get("/booking/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: ObjectId(id) };
+      const result = await bookingService.findOne(query);
+      res.send(result);
+    });
+
+    app.patch("/booking/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: ObjectId(id) };
+      const payment = req.body;
+      const updateDoc = {
+        $set: {
+          paid: true,
+          transactionId: payment.transactionId,
+        },
+      };
+      const updateBooking = await bookingService.updateOne(filter, updateDoc);
+
+      const result = await paymentUser.insertOne(payment);
+      res.send(updateDoc);
     });
 
     app.get("/available", async (req, res) => {
